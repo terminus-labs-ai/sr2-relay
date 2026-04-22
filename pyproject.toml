@@ -1,0 +1,44 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sr2-relay"
+version = "0.1.0"
+description = "LLM call layer for the SR2 stack — wraps sr2 context management and exposes an OpenAI-compatible HTTP API"
+requires-python = ">=3.12"
+dependencies = [
+    "sr2",
+    "litellm",
+    "fastapi",
+    "uvicorn[standard]",
+    "pydantic>=2",
+    "pyyaml",
+    "httpx",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+    "pytest-cov",
+    "httpx",
+]
+
+[project.scripts]
+sr2-relay = "sr2_relay.__main__:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/sr2_relay"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.hatch.envs.default]
+dependencies = [
+    "pytest",
+    "pytest-asyncio",
+    "pytest-cov",
+    "httpx",
+]
