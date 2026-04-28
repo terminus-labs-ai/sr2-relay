@@ -24,9 +24,7 @@ def _resolve_env_vars(data: dict, env_base_prefix="SR2_RELAY"):
 
 
 def build_litellm_config(config: SR2RelayConfig) -> dict:
-  litellm_config: dict[str, Any] = {
-    "router_settings": {"pass_through_all_models": True}
-  }
+  litellm_config: dict[str, Any] = {}
 
   configured_models = []
   if config.model:

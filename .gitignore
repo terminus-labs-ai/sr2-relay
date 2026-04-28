@@ -42,3 +42,4 @@ tsconfig.tsbuildinfo
 site/
 .claude/*.local.*
 .opencode
+.litellm-proxy.yaml

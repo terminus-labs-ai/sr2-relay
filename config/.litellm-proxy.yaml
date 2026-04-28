@@ -1,8 +1,0 @@
-router_settings:
-  pass_through_all_models: true
-model_list:
-- model_name: qwen3.6:27b
-  litellm_params:
-    model: openai/qwen3.6:27b
-    api_key: dummy
-    api_base: http://192.168.50.117:11438

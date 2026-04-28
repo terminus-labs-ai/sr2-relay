@@ -12,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 class SR2Handler(CustomLogger):
   def __init__(self):
-    pass
+    self._pass_through_set = False
 
   async def async_pre_call_hook(
     self,
@@ -29,7 +29,15 @@ class SR2Handler(CustomLogger):
     ],
   ):
 
-    logger.info(f"Got a async_pre_call_hook; call_type = {call_type}; {data}")
+    if not self._pass_through_set:
+      from litellm.proxy.proxy_server import llm_router
+
+      if llm_router is not None:
+        llm_router.router_general_settings.pass_through_all_models = True
+        self._pass_through_set = True
+        logger.info("Enabled pass_through_all_models on LiteLLM router")
+
+    logger.info(f"pre_call_hook; call_type={call_type}; model={data.get('model')}")
     return data
 
   async def async_post_call_failure_hook(
