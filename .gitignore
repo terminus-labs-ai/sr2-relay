@@ -43,3 +43,4 @@ site/
 .claude/*.local.*
 .opencode
 .litellm-proxy.yaml
+.vscode
