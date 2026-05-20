@@ -1,12 +1,11 @@
 import argparse
 import logging
-import os
 
 import uvicorn
-import yaml
 from dotenv import load_dotenv
 
-from sr2_relay.config import build_litellm_config, load_config
+from sr2_relay.config import load_config
+from sr2_relay.server import create_app
 
 load_dotenv()
 
@@ -15,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
   parser = argparse.ArgumentParser(
-    description="SR2 Bridge — context optimization proxy for LLM API calls",
+    description="sr2-relay — LLM format adapter and session continuity proxy",
   )
   parser.add_argument(
     "config",
@@ -30,16 +29,15 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
   )
   parser.add_argument(
     "--dev",
-    default=None,
     action="store_true",
-    help="Enable development mode (optional)",
+    default=False,
+    help="Enable development mode (auto-reload)",
   )
   return parser.parse_args(argv)
 
 
 def run():
-  """Starts the REST API server."""
-
+  """Start the sr2-relay HTTP server."""
   args = _parse_args()
 
   logging.basicConfig(
@@ -49,15 +47,10 @@ def run():
   )
 
   config = load_config(args.config)
-  litellm_config = build_litellm_config(config)
-  litellm_config_path = "config/.litellm-proxy.yaml"
-  logger.info(f"Writing litellm config: {yaml.dump(litellm_config)}")
+  app = create_app(config)
 
-  with open(litellm_config_path, "w") as file:
-    yaml.dump(litellm_config, file, sort_keys=False, default_flow_style=False)
-
-  os.environ["CONFIG_FILE_PATH"] = litellm_config_path
-  uvicorn.run("sr2_relay.main:app", host=config.host, port=config.port, reload=args.dev)
+  logger.info(f"Starting sr2-relay on {config.host}:{config.port}")
+  uvicorn.run(app, host=config.host, port=config.port, reload=args.dev)
 
 
 if __name__ == "__main__":
