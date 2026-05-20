@@ -220,3 +220,9 @@ class RelaySession:
                 stop_reason="end_turn",
                 usage=TokenUsage(),
             )
+
+    def delete_session(self, session_id: str) -> None:
+        """Remove a session from the pool. Raises KeyError if not found."""
+        if session_id not in self._pool._sessions:
+            raise KeyError(session_id)
+        self._pool.delete(session_id)
