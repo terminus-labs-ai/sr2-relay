@@ -10,8 +10,10 @@ from __future__ import annotations
 import hashlib
 import inspect
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import TYPE_CHECKING
 
+import yaml
 from sr2.config.models import LayerConfig, PipelineConfig, ResolverConfig
 from sr2.models import (
     ContentBlock as SR2ContentBlock,
@@ -129,15 +131,16 @@ def fingerprint(request: CanonicalRequest) -> str:
 class SessionPool:
     """Maps session_id strings to SR2 orchestrator instances."""
 
-    def __init__(self) -> None:
+    def __init__(self, pipeline_config: PipelineConfig | None = None) -> None:
         self._sessions: dict[str, SR2] = {}
+        self._pipeline_config = pipeline_config or _default_pipeline_config()
 
     def get_or_create(self, session_id: str, llm: LLMCallable) -> SR2:
         """Return existing SR2 instance for *session_id*, or create a new one."""
         if session_id in self._sessions:
             return self._sessions[session_id]
         sr2 = SR2(
-            pipeline_config=_default_pipeline_config(),
+            pipeline_config=self._pipeline_config,
             llm={"default": llm},
             token_counter=_default_token_counter(),
         )
@@ -161,12 +164,22 @@ class SessionPool:
 # ---------------------------------------------------------------------------
 
 
+def _load_pipeline_config(path: str) -> PipelineConfig:
+    raw = yaml.safe_load(Path(path).read_text())
+    return PipelineConfig(**raw)
+
+
 class RelaySession:
     """Drives SR2 turns for relay requests."""
 
     def __init__(self, config: SR2RelayConfig) -> None:
         self._config = config
-        self._pool = SessionPool()
+        pipeline = (
+            _load_pipeline_config(config.pipeline_config)
+            if config.pipeline_config
+            else _default_pipeline_config()
+        )
+        self._pool = SessionPool(pipeline)
 
     async def complete(
         self,

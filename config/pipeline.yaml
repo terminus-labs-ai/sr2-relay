@@ -1,0 +1,11 @@
+# sr2 pipeline config for sr2-relay
+# This file is independent of sr2-relay-config.yaml — it's a standard
+# sr2 PipelineConfig and can be shared across relay deployments.
+
+token_budget: 200000
+
+layers:
+  - name: session
+    resolvers:
+      - type: input
+      - type: session

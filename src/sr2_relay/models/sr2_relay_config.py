@@ -19,6 +19,8 @@ class SR2RelayConfig(BaseModel):
   api_base: str
   api_key: str = ""
 
+  pipeline_config: Optional[str] = None  # path to sr2 pipeline YAML
+
   model: Optional[ModelSlotConfig] = None
   fast_model: Optional[ModelSlotConfig] = None
   embedding_model: Optional[ModelSlotConfig] = None

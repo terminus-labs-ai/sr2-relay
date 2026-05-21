@@ -1,6 +1,7 @@
 timeout: 120
 host: 0.0.0.0
 api_base: http://192.168.50.117:11438
+pipeline_config: config/pipeline.yaml
 
 model:
   model: openai/qwen3.6:27b
