@@ -75,7 +75,7 @@ class RelayLLMCallable:
                     yield StreamEvent(type="text", text=delta_content)
 
             # Usage
-            if chunk.usage is not None:
+            if getattr(chunk, "usage", None) is not None:
                 yield StreamEvent(
                     type="usage",
                     usage=TokenUsage(
