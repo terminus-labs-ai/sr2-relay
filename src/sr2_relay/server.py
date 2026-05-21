@@ -128,6 +128,24 @@ def create_app(
             }
 
     # -----------------------------------------------------------------------
+    # Models list — Hermes and other clients probe this on startup
+    # -----------------------------------------------------------------------
+
+    @app.get("/v1/models")
+    async def list_models() -> dict:
+        model_id = config.model.model if config.model and config.model.model else "relay"
+        return {
+            "object": "list",
+            "data": [
+                {
+                    "id": model_id,
+                    "object": "model",
+                    "owned_by": "sr2-relay",
+                }
+            ],
+        }
+
+    # -----------------------------------------------------------------------
     # Session deletion
     # -----------------------------------------------------------------------
 

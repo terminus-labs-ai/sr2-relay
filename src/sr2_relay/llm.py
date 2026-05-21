@@ -10,6 +10,10 @@ from sr2.protocols.llm import CompletionRequest, CompletionResponse, StreamEvent
 
 class RelayLLMCallable:
     def __init__(self, model: str, base_url: str | None = None, **kwargs) -> None:
+        # When hitting an OpenAI-compatible endpoint with a bare model name,
+        # litellm needs a provider prefix to route the call correctly.
+        if base_url is not None and "/" not in model:
+            model = f"openai/{model}"
         self._model = model
         self._kwargs: dict = kwargs
         if base_url is not None:
