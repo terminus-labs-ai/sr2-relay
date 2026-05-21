@@ -507,3 +507,221 @@ class TestRelaySessionCompleteStreaming:
     assert collected[0].type == "text"
     assert collected[0].text == "Hello"
     assert collected[-1].type == "end"
+
+
+# ---------------------------------------------------------------------------
+# RelaySession.complete — non-streaming with tool_use events
+# ---------------------------------------------------------------------------
+
+
+def _tool_use_event(
+    tool_use_id: str = "tu_001",
+    tool_name: str = "my_tool",
+    tool_input: dict | None = None,
+) -> MagicMock:
+    """Return a mock StreamEvent with type='tool_use'."""
+    event = MagicMock()
+    event.type = "tool_use"
+    event.tool_use_id = tool_use_id
+    event.tool_name = tool_name
+    event.tool_input = tool_input if tool_input is not None else {"key": "value"}
+    return event
+
+
+def _text_event(text: str = "hello") -> MagicMock:
+    """Return a mock StreamEvent with type='text'."""
+    event = MagicMock()
+    event.type = "text"
+    event.text = text
+    return event
+
+
+def _end_event() -> MagicMock:
+    event = MagicMock()
+    event.type = "end"
+    return event
+
+
+class TestRelaySessionCompleteToolUse:
+    @pytest.mark.asyncio
+    async def test_single_tool_use_event_produces_one_tool_use_block(self):
+        from sr2.models import ToolUseBlock
+
+        config = _make_relay_config()
+        session = RelaySession(config)
+
+        async def _turn(user_input):
+            yield _tool_use_event()
+            yield _end_event()
+
+        with (
+            patch("sr2_relay.session.SR2") as mock_sr2_class,
+            patch("sr2_relay.session.RelayLLMCallable"),
+        ):
+            mock_sr2_instance = _mock_sr2()
+            mock_sr2_instance.turn = _turn
+            mock_sr2_class.return_value = mock_sr2_instance
+
+            result = await session.complete(_make_request(), stream=False)
+
+        tool_blocks = [b for b in result.content if isinstance(b, ToolUseBlock)]
+        assert len(tool_blocks) == 1
+
+    @pytest.mark.asyncio
+    async def test_tool_use_block_fields_match_event(self):
+        from sr2.models import ToolUseBlock
+
+        config = _make_relay_config()
+        session = RelaySession(config)
+
+        async def _turn(user_input):
+            yield _tool_use_event(
+                tool_use_id="call_abc",
+                tool_name="search",
+                tool_input={"query": "python"},
+            )
+            yield _end_event()
+
+        with (
+            patch("sr2_relay.session.SR2") as mock_sr2_class,
+            patch("sr2_relay.session.RelayLLMCallable"),
+        ):
+            mock_sr2_instance = _mock_sr2()
+            mock_sr2_instance.turn = _turn
+            mock_sr2_class.return_value = mock_sr2_instance
+
+            result = await session.complete(_make_request(), stream=False)
+
+        tool_block = next(b for b in result.content if isinstance(b, ToolUseBlock))
+        assert tool_block.id == "call_abc"
+        assert tool_block.name == "search"
+        assert tool_block.input == {"query": "python"}
+
+    @pytest.mark.asyncio
+    async def test_stop_reason_is_tool_use_when_tool_use_event_present(self):
+        config = _make_relay_config()
+        session = RelaySession(config)
+
+        async def _turn(user_input):
+            yield _tool_use_event()
+            yield _end_event()
+
+        with (
+            patch("sr2_relay.session.SR2") as mock_sr2_class,
+            patch("sr2_relay.session.RelayLLMCallable"),
+        ):
+            mock_sr2_instance = _mock_sr2()
+            mock_sr2_instance.turn = _turn
+            mock_sr2_class.return_value = mock_sr2_instance
+
+            result = await session.complete(_make_request(), stream=False)
+
+        assert result.stop_reason == "tool_use"
+
+    @pytest.mark.asyncio
+    async def test_multiple_tool_use_events_produce_multiple_blocks(self):
+        from sr2.models import ToolUseBlock
+
+        config = _make_relay_config()
+        session = RelaySession(config)
+
+        async def _turn(user_input):
+            yield _tool_use_event(tool_use_id="tu_1", tool_name="search")
+            yield _tool_use_event(tool_use_id="tu_2", tool_name="calculator")
+            yield _end_event()
+
+        with (
+            patch("sr2_relay.session.SR2") as mock_sr2_class,
+            patch("sr2_relay.session.RelayLLMCallable"),
+        ):
+            mock_sr2_instance = _mock_sr2()
+            mock_sr2_instance.turn = _turn
+            mock_sr2_class.return_value = mock_sr2_instance
+
+            result = await session.complete(_make_request(), stream=False)
+
+        tool_blocks = [b for b in result.content if isinstance(b, ToolUseBlock)]
+        assert len(tool_blocks) == 2
+        ids = {b.id for b in tool_blocks}
+        assert ids == {"tu_1", "tu_2"}
+
+    @pytest.mark.asyncio
+    async def test_tool_only_response_has_no_text_block(self):
+        from sr2.models import TextBlock
+
+        config = _make_relay_config()
+        session = RelaySession(config)
+
+        async def _turn(user_input):
+            yield _tool_use_event()
+            yield _end_event()
+
+        with (
+            patch("sr2_relay.session.SR2") as mock_sr2_class,
+            patch("sr2_relay.session.RelayLLMCallable"),
+        ):
+            mock_sr2_instance = _mock_sr2()
+            mock_sr2_instance.turn = _turn
+            mock_sr2_class.return_value = mock_sr2_instance
+
+            result = await session.complete(_make_request(), stream=False)
+
+        text_blocks = [b for b in result.content if isinstance(b, TextBlock)]
+        assert len(text_blocks) == 0
+
+    @pytest.mark.asyncio
+    async def test_mixed_text_and_tool_use_events_produce_both_block_types(self):
+        from sr2.models import TextBlock, ToolUseBlock
+
+        config = _make_relay_config()
+        session = RelaySession(config)
+
+        async def _turn(user_input):
+            yield _text_event("I'll use a tool.")
+            yield _tool_use_event()
+            yield _end_event()
+
+        with (
+            patch("sr2_relay.session.SR2") as mock_sr2_class,
+            patch("sr2_relay.session.RelayLLMCallable"),
+        ):
+            mock_sr2_instance = _mock_sr2()
+            mock_sr2_instance.turn = _turn
+            mock_sr2_class.return_value = mock_sr2_instance
+
+            result = await session.complete(_make_request(), stream=False)
+
+        text_blocks = [b for b in result.content if isinstance(b, TextBlock)]
+        tool_blocks = [b for b in result.content if isinstance(b, ToolUseBlock)]
+        assert len(text_blocks) == 1
+        assert len(tool_blocks) == 1
+        assert text_blocks[0].text == "I'll use a tool."
+        assert result.stop_reason == "tool_use"
+
+    @pytest.mark.asyncio
+    async def test_text_only_events_unchanged_text_block_and_end_turn(self):
+        from sr2.models import TextBlock, ToolUseBlock
+
+        config = _make_relay_config()
+        session = RelaySession(config)
+
+        async def _turn(user_input):
+            yield _text_event("Just text.")
+            yield _end_event()
+
+        with (
+            patch("sr2_relay.session.SR2") as mock_sr2_class,
+            patch("sr2_relay.session.RelayLLMCallable"),
+        ):
+            mock_sr2_instance = _mock_sr2()
+            mock_sr2_instance.turn = _turn
+            mock_sr2_class.return_value = mock_sr2_instance
+
+            result = await session.complete(_make_request(), stream=False)
+
+        text_blocks = [b for b in result.content if isinstance(b, TextBlock)]
+        tool_blocks = [b for b in result.content if isinstance(b, ToolUseBlock)]
+        assert len(text_blocks) == 1
+        assert text_blocks[0].text == "Just text."
+        assert len(tool_blocks) == 0
+        assert result.stop_reason == "end_turn"

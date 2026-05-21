@@ -684,3 +684,460 @@ class TestErrorCases:
                     "/v1/chat/completions", json=_oai_chat_body()
                 )
         assert resp.status_code == 400
+
+
+# ---------------------------------------------------------------------------
+# Non-streaming tool call serialization
+# ---------------------------------------------------------------------------
+
+
+def _make_tool_completion_response(
+    tool_blocks: list,
+    text_blocks: list | None = None,
+) -> "CompletionResponse":
+    """Build a CompletionResponse whose content contains ToolUseBlock items."""
+    from sr2.models import ToolUseBlock as SR2ToolUseBlock
+
+    content = list(text_blocks or []) + list(tool_blocks)
+    return CompletionResponse(
+        id="tool-response-id",
+        content=content,
+        stop_reason="tool_use",
+        usage=TokenUsage(),
+    )
+
+
+def _make_tool_use_block(
+    id: str = "tc_1",
+    name: str = "get_weather",
+    input: dict | None = None,
+) -> "object":
+    from sr2.models import ToolUseBlock as SR2ToolUseBlock
+
+    return SR2ToolUseBlock(id=id, name=name, input=input or {"location": "Oslo"})
+
+
+class TestChatCompletionsNonStreamingToolCalls:
+    @pytest.mark.asyncio
+    async def test_tool_calls_array_present(self):
+        """Response with a ToolUseBlock must include tool_calls in choices[0].message."""
+        tool_block = _make_tool_use_block()
+        completion = _make_tool_completion_response(tool_blocks=[tool_block])
+
+        session = _make_mock_relay_session()
+
+        async def _complete(request, session_id=None, stream=False):
+            return completion
+
+        session.complete = _complete
+        app = _make_app(relay_session=session)
+
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.post(
+                "/v1/chat/completions", json=_oai_chat_body(stream=False)
+            )
+
+        body = resp.json()
+        message = body["choices"][0]["message"]
+        assert "tool_calls" in message
+        assert isinstance(message["tool_calls"], list)
+
+    @pytest.mark.asyncio
+    async def test_single_tool_call_fields(self):
+        """Single ToolUseBlock → one tool_calls entry with correct id, name, arguments."""
+        tool_block = _make_tool_use_block(
+            id="tc_1", name="get_weather", input={"location": "Oslo"}
+        )
+        completion = _make_tool_completion_response(tool_blocks=[tool_block])
+
+        session = _make_mock_relay_session()
+
+        async def _complete(request, session_id=None, stream=False):
+            return completion
+
+        session.complete = _complete
+        app = _make_app(relay_session=session)
+
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.post(
+                "/v1/chat/completions", json=_oai_chat_body(stream=False)
+            )
+
+        tool_calls = resp.json()["choices"][0]["message"]["tool_calls"]
+        assert len(tool_calls) == 1
+        tc = tool_calls[0]
+        assert tc["id"] == "tc_1"
+        assert tc["type"] == "function"
+        assert tc["function"]["name"] == "get_weather"
+
+    @pytest.mark.asyncio
+    async def test_arguments_is_json_string_not_dict(self):
+        """arguments must be a JSON-encoded string, not a dict."""
+        tool_block = _make_tool_use_block(input={"location": "Oslo"})
+        completion = _make_tool_completion_response(tool_blocks=[tool_block])
+
+        session = _make_mock_relay_session()
+
+        async def _complete(request, session_id=None, stream=False):
+            return completion
+
+        session.complete = _complete
+        app = _make_app(relay_session=session)
+
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.post(
+                "/v1/chat/completions", json=_oai_chat_body(stream=False)
+            )
+
+        arguments = resp.json()["choices"][0]["message"]["tool_calls"][0]["function"]["arguments"]
+        assert isinstance(arguments, str)
+        parsed = json.loads(arguments)
+        assert parsed == {"location": "Oslo"}
+
+    @pytest.mark.asyncio
+    async def test_finish_reason_is_tool_calls(self):
+        """finish_reason must be 'tool_calls' when content contains ToolUseBlock."""
+        tool_block = _make_tool_use_block()
+        completion = _make_tool_completion_response(tool_blocks=[tool_block])
+
+        session = _make_mock_relay_session()
+
+        async def _complete(request, session_id=None, stream=False):
+            return completion
+
+        session.complete = _complete
+        app = _make_app(relay_session=session)
+
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.post(
+                "/v1/chat/completions", json=_oai_chat_body(stream=False)
+            )
+
+        assert resp.json()["choices"][0]["finish_reason"] == "tool_calls"
+
+    @pytest.mark.asyncio
+    async def test_tool_only_content_is_null(self):
+        """When content has only ToolUseBlocks, message.content must be null."""
+        tool_block = _make_tool_use_block()
+        completion = _make_tool_completion_response(tool_blocks=[tool_block])
+
+        session = _make_mock_relay_session()
+
+        async def _complete(request, session_id=None, stream=False):
+            return completion
+
+        session.complete = _complete
+        app = _make_app(relay_session=session)
+
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.post(
+                "/v1/chat/completions", json=_oai_chat_body(stream=False)
+            )
+
+        message = resp.json()["choices"][0]["message"]
+        assert message["content"] is None
+
+    @pytest.mark.asyncio
+    async def test_mixed_text_and_tool_content_has_text_and_tool_calls(self):
+        """When content has both TextBlock and ToolUseBlock, message.content is the
+        text string and tool_calls is present."""
+        text_block = SR2TextBlock(text="Fetching weather now.")
+        tool_block = _make_tool_use_block()
+        completion = _make_tool_completion_response(
+            tool_blocks=[tool_block], text_blocks=[text_block]
+        )
+
+        session = _make_mock_relay_session()
+
+        async def _complete(request, session_id=None, stream=False):
+            return completion
+
+        session.complete = _complete
+        app = _make_app(relay_session=session)
+
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.post(
+                "/v1/chat/completions", json=_oai_chat_body(stream=False)
+            )
+
+        message = resp.json()["choices"][0]["message"]
+        assert message["content"] == "Fetching weather now."
+        assert len(message["tool_calls"]) == 1
+
+    @pytest.mark.asyncio
+    async def test_multiple_tool_calls_produce_multiple_entries(self):
+        """Multiple ToolUseBlocks → multiple entries in tool_calls, preserving order."""
+        tool_a = _make_tool_use_block(id="tc_1", name="get_weather", input={"location": "Oslo"})
+        tool_b = _make_tool_use_block(id="tc_2", name="get_time", input={"timezone": "UTC"})
+        completion = _make_tool_completion_response(tool_blocks=[tool_a, tool_b])
+
+        session = _make_mock_relay_session()
+
+        async def _complete(request, session_id=None, stream=False):
+            return completion
+
+        session.complete = _complete
+        app = _make_app(relay_session=session)
+
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            resp = await client.post(
+                "/v1/chat/completions", json=_oai_chat_body(stream=False)
+            )
+
+        tool_calls = resp.json()["choices"][0]["message"]["tool_calls"]
+        assert len(tool_calls) == 2
+        assert tool_calls[0]["id"] == "tc_1"
+        assert tool_calls[0]["function"]["name"] == "get_weather"
+        assert tool_calls[1]["id"] == "tc_2"
+        assert tool_calls[1]["function"]["name"] == "get_time"
+
+
+# ---------------------------------------------------------------------------
+# Streaming tool_use event serialization
+# ---------------------------------------------------------------------------
+
+
+class TestChatCompletionsStreamingToolCallEvents:
+    @pytest.mark.asyncio
+    async def test_tool_use_event_produces_delta_tool_calls_chunk(self):
+        """A tool_use StreamEvent must produce an SSE chunk with delta.tool_calls."""
+        events = [
+            StreamEvent(
+                type="tool_use",
+                tool_use_id="tc_1",
+                tool_name="get_weather",
+                tool_input={"location": "Oslo"},
+            ),
+            StreamEvent(type="end"),
+        ]
+        session = _make_mock_relay_session(stream_events=events)
+        app = _make_app(relay_session=session)
+
+        chunks: list[dict] = []
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            async with client.stream(
+                "POST", "/v1/chat/completions", json=_oai_chat_body(stream=True)
+            ) as resp:
+                async for line in resp.aiter_lines():
+                    if line.startswith("data: ") and line != "data: [DONE]":
+                        chunks.append(json.loads(line[len("data: "):]))
+
+        tool_chunks = [
+            c for c in chunks
+            if c.get("choices", [{}])[0].get("delta", {}).get("tool_calls")
+        ]
+        assert len(tool_chunks) >= 1
+
+    @pytest.mark.asyncio
+    async def test_tool_use_chunk_fields(self):
+        """SSE chunk for tool_use event must carry correct id, name, arguments."""
+        events = [
+            StreamEvent(
+                type="tool_use",
+                tool_use_id="tc_1",
+                tool_name="get_weather",
+                tool_input={"location": "Oslo"},
+            ),
+            StreamEvent(type="end"),
+        ]
+        session = _make_mock_relay_session(stream_events=events)
+        app = _make_app(relay_session=session)
+
+        chunks: list[dict] = []
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            async with client.stream(
+                "POST", "/v1/chat/completions", json=_oai_chat_body(stream=True)
+            ) as resp:
+                async for line in resp.aiter_lines():
+                    if line.startswith("data: ") and line != "data: [DONE]":
+                        chunks.append(json.loads(line[len("data: "):]))
+
+        tool_chunks = [
+            c for c in chunks
+            if c.get("choices", [{}])[0].get("delta", {}).get("tool_calls")
+        ]
+        tc_entry = tool_chunks[0]["choices"][0]["delta"]["tool_calls"][0]
+        assert tc_entry["index"] == 0
+        assert tc_entry["id"] == "tc_1"
+        assert tc_entry["type"] == "function"
+        assert tc_entry["function"]["name"] == "get_weather"
+
+    @pytest.mark.asyncio
+    async def test_tool_use_chunk_arguments_is_json_string(self):
+        """Streaming tool_calls arguments must be a JSON string, not a dict."""
+        events = [
+            StreamEvent(
+                type="tool_use",
+                tool_use_id="tc_1",
+                tool_name="get_weather",
+                tool_input={"location": "Oslo"},
+            ),
+            StreamEvent(type="end"),
+        ]
+        session = _make_mock_relay_session(stream_events=events)
+        app = _make_app(relay_session=session)
+
+        chunks: list[dict] = []
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            async with client.stream(
+                "POST", "/v1/chat/completions", json=_oai_chat_body(stream=True)
+            ) as resp:
+                async for line in resp.aiter_lines():
+                    if line.startswith("data: ") and line != "data: [DONE]":
+                        chunks.append(json.loads(line[len("data: "):]))
+
+        tool_chunks = [
+            c for c in chunks
+            if c.get("choices", [{}])[0].get("delta", {}).get("tool_calls")
+        ]
+        arguments = tool_chunks[0]["choices"][0]["delta"]["tool_calls"][0]["function"]["arguments"]
+        assert isinstance(arguments, str)
+        assert json.loads(arguments) == {"location": "Oslo"}
+
+    @pytest.mark.asyncio
+    async def test_tool_use_chunk_has_correct_object_type(self):
+        """Streaming tool_use chunk must have object='chat.completion.chunk'."""
+        events = [
+            StreamEvent(
+                type="tool_use",
+                tool_use_id="tc_1",
+                tool_name="get_weather",
+                tool_input={"location": "Oslo"},
+            ),
+            StreamEvent(type="end"),
+        ]
+        session = _make_mock_relay_session(stream_events=events)
+        app = _make_app(relay_session=session)
+
+        chunks: list[dict] = []
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            async with client.stream(
+                "POST", "/v1/chat/completions", json=_oai_chat_body(stream=True)
+            ) as resp:
+                async for line in resp.aiter_lines():
+                    if line.startswith("data: ") and line != "data: [DONE]":
+                        chunks.append(json.loads(line[len("data: "):]))
+
+        tool_chunks = [
+            c for c in chunks
+            if c.get("choices", [{}])[0].get("delta", {}).get("tool_calls")
+        ]
+        assert tool_chunks[0]["object"] == "chat.completion.chunk"
+
+    @pytest.mark.asyncio
+    async def test_tool_use_chunk_finish_reason_is_null(self):
+        """tool_use delta chunks must have finish_reason: null."""
+        events = [
+            StreamEvent(
+                type="tool_use",
+                tool_use_id="tc_1",
+                tool_name="get_weather",
+                tool_input={"location": "Oslo"},
+            ),
+            StreamEvent(type="end"),
+        ]
+        session = _make_mock_relay_session(stream_events=events)
+        app = _make_app(relay_session=session)
+
+        chunks: list[dict] = []
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            async with client.stream(
+                "POST", "/v1/chat/completions", json=_oai_chat_body(stream=True)
+            ) as resp:
+                async for line in resp.aiter_lines():
+                    if line.startswith("data: ") and line != "data: [DONE]":
+                        chunks.append(json.loads(line[len("data: "):]))
+
+        tool_chunks = [
+            c for c in chunks
+            if c.get("choices", [{}])[0].get("delta", {}).get("tool_calls")
+        ]
+        assert tool_chunks[0]["choices"][0]["finish_reason"] is None
+
+    @pytest.mark.asyncio
+    async def test_streaming_text_events_still_produce_content_delta(self):
+        """Regression: text StreamEvents still produce delta.content chunks when
+        mixed with tool_use events."""
+        events = [
+            StreamEvent(type="text", text="Thinking..."),
+            StreamEvent(
+                type="tool_use",
+                tool_use_id="tc_1",
+                tool_name="get_weather",
+                tool_input={"location": "Oslo"},
+            ),
+            StreamEvent(type="end"),
+        ]
+        session = _make_mock_relay_session(stream_events=events)
+        app = _make_app(relay_session=session)
+
+        chunks: list[dict] = []
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            async with client.stream(
+                "POST", "/v1/chat/completions", json=_oai_chat_body(stream=True)
+            ) as resp:
+                async for line in resp.aiter_lines():
+                    if line.startswith("data: ") and line != "data: [DONE]":
+                        chunks.append(json.loads(line[len("data: "):]))
+
+        text_chunks = [
+            c for c in chunks
+            if c.get("choices", [{}])[0].get("delta", {}).get("content")
+        ]
+        assert len(text_chunks) >= 1
+        assert text_chunks[0]["choices"][0]["delta"]["content"] == "Thinking..."
+
+    @pytest.mark.asyncio
+    async def test_streaming_done_sentinel_still_emitted_after_tool_use(self):
+        """Regression: data: [DONE] must still be the final SSE line when the
+        stream includes tool_use events."""
+        events = [
+            StreamEvent(
+                type="tool_use",
+                tool_use_id="tc_1",
+                tool_name="get_weather",
+                tool_input={"location": "Oslo"},
+            ),
+            StreamEvent(type="end"),
+        ]
+        session = _make_mock_relay_session(stream_events=events)
+        app = _make_app(relay_session=session)
+
+        lines: list[str] = []
+        async with httpx.AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://test"
+        ) as client:
+            async with client.stream(
+                "POST", "/v1/chat/completions", json=_oai_chat_body(stream=True)
+            ) as resp:
+                async for line in resp.aiter_lines():
+                    if line:
+                        lines.append(line)
+
+        assert lines[-1] == "data: [DONE]"

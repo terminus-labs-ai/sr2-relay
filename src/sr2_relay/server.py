@@ -94,6 +94,31 @@ def create_app(
                             ],
                         }
                         yield f"data: {json.dumps(chunk)}\n\n"
+                    elif event.type == "tool_use":
+                        chunk = {
+                            "id": "relay-stream",
+                            "object": "chat.completion.chunk",
+                            "choices": [
+                                {
+                                    "index": 0,
+                                    "delta": {
+                                        "tool_calls": [
+                                            {
+                                                "index": 0,
+                                                "id": event.tool_use_id,
+                                                "type": "function",
+                                                "function": {
+                                                    "name": event.tool_name,
+                                                    "arguments": json.dumps(event.tool_input),
+                                                },
+                                            }
+                                        ]
+                                    },
+                                    "finish_reason": None,
+                                }
+                            ],
+                        }
+                        yield f"data: {json.dumps(chunk)}\n\n"
                 yield "data: [DONE]\n\n"
 
             return StreamingResponse(
@@ -102,13 +127,29 @@ def create_app(
             )
         else:
             # result is a CompletionResponse
-            from sr2.models import TextBlock as SR2TextBlock
+            from sr2.models import TextBlock as SR2TextBlock, ToolUseBlock as SR2ToolUseBlock
 
             content_text = "".join(
                 block.text
                 for block in result.content
                 if isinstance(block, SR2TextBlock)
             )
+            tool_calls = [
+                {
+                    "id": block.id,
+                    "type": "function",
+                    "function": {
+                        "name": block.name,
+                        "arguments": json.dumps(block.input),
+                    },
+                }
+                for block in result.content
+                if isinstance(block, SR2ToolUseBlock)
+            ]
+            message: dict = {"role": "assistant", "content": content_text or None}
+            if tool_calls:
+                message["tool_calls"] = tool_calls
+            finish_reason = "tool_calls" if tool_calls else "stop"
             usage = result.usage
             return {
                 "id": result.id,
@@ -116,8 +157,8 @@ def create_app(
                 "choices": [
                     {
                         "index": 0,
-                        "message": {"role": "assistant", "content": content_text},
-                        "finish_reason": "stop",
+                        "message": message,
+                        "finish_reason": finish_reason,
                     }
                 ],
                 "usage": {

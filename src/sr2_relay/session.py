@@ -247,13 +247,27 @@ class RelaySession:
             return turn_gen
         else:
             accumulated: list[str] = []
+            tool_blocks: list[SR2ToolUseBlock] = []
             async for event in turn_gen:
                 if event.type == "text" and hasattr(event, "text"):
                     accumulated.append(event.text)
+                elif event.type == "tool_use":
+                    tool_blocks.append(
+                        SR2ToolUseBlock(
+                            id=event.tool_use_id,
+                            name=event.tool_name,
+                            input=event.tool_input,
+                        )
+                    )
+            content: list[SR2ContentBlock] = []
+            if accumulated:
+                content.append(SR2TextBlock(text="".join(accumulated)))
+            content.extend(tool_blocks)
+            stop_reason = "tool_use" if tool_blocks else "end_turn"
             return CompletionResponse(
                 id="relay-response",
-                content=[SR2TextBlock(text="".join(accumulated))],
-                stop_reason="end_turn",
+                content=content,
+                stop_reason=stop_reason,
                 usage=TokenUsage(),
             )
 
