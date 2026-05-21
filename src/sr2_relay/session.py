@@ -44,8 +44,8 @@ def _default_pipeline_config() -> PipelineConfig:
             LayerConfig(
                 name="session",
                 resolvers=[
-                    ResolverConfig(type="input"),
                     ResolverConfig(type="session"),
+                    ResolverConfig(type="input"),
                 ],
             )
         ]
@@ -164,6 +164,21 @@ class SessionPool:
 # ---------------------------------------------------------------------------
 
 
+def _clear_assistant_response_events(engine) -> None:
+    """Remove buffered assistant_response events from all layer pending queues.
+
+    At the end of each turn, the orchestrator queues an assistant_response
+    event on the bus, which is immediately captured into layer._pending_events
+    via a sync callback. On the next turn, engine.run() resets the bus queue
+    but leaves layer._pending_events intact. We clear these events before
+    re-seeding so the seeded history is not duplicated by event capture.
+    """
+    for layer in engine._layers:
+        layer._pending_events = [
+            e for e in layer._pending_events if e.name != "assistant_response"
+        ]
+
+
 def _load_pipeline_config(path: str) -> PipelineConfig:
     raw = yaml.safe_load(Path(path).read_text())
     return PipelineConfig(**raw)
@@ -190,10 +205,7 @@ class RelaySession:
         # 1. Resolve session_id
         sid = session_id if session_id is not None else fingerprint(request)
 
-        # 2. Check if session already exists BEFORE get_or_create
-        is_new = self._pool.get(sid) is None
-
-        # 3. Build LLM callable
+        # 2. Build LLM callable
         llm = RelayLLMCallable(model=request.model, base_url=self._config.api_base)
 
         # 4. Get or create SR2 instance
@@ -204,8 +216,19 @@ class RelaySession:
         prior = messages[:-1]
         current = messages[-1]
 
-        # 6. Seed new sessions that have prior history
-        if is_new and prior:
+        # 6. Re-seed from caller-provided history on every turn.
+        #
+        # Relay clients (e.g. Hermes) send the full conversation history with
+        # every request — they are the authoritative source of truth. SR2's
+        # own event-based accumulation would lag by one turn because
+        # assistant_response events are buffered for the next cycle. To avoid
+        # that lag and prevent duplicate messages, we:
+        #   a) clear any buffered assistant_response events from layer queues
+        #      (they were captured at the end of the last turn and are already
+        #      included in the `prior` slice Hermes sent us)
+        #   b) overwrite the SessionResolver history with the full prior slice
+        if prior:
+            _clear_assistant_response_events(sr2._engine)
             sr2.seed_session([_to_sr2_message(m) for m in prior])
 
         # 7. Build sr2 content blocks for the current user turn

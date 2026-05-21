@@ -7,5 +7,5 @@ token_budget: 200000
 layers:
   - name: session
     resolvers:
-      - type: input
       - type: session
+      - type: input

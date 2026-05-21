@@ -324,7 +324,13 @@ class TestRelaySessionCompleteNonStreaming:
     assert seeded[1].role == "assistant"
 
   @pytest.mark.asyncio
-  async def test_existing_session_seed_not_called_even_with_prior_messages(self):
+  async def test_existing_session_reseeded_on_subsequent_calls(self):
+    """Relay re-seeds from caller-provided history on every turn.
+
+    Clients like Hermes send the full conversation history with each request
+    and are the authoritative source of truth. Re-seeding on every turn
+    ensures the compiled context is always correct without a one-turn lag.
+    """
     config = _make_relay_config()
     session = RelaySession(config)
 
@@ -346,10 +352,10 @@ class TestRelaySessionCompleteNonStreaming:
       await session.complete(request, session_id="fixed-id", stream=False)
       mock_sr2_instance.seed_session.reset_mock()
 
-      # Second call to the same session_id — already exists
+      # Second call: should re-seed with the same prior history
       await session.complete(request, session_id="fixed-id", stream=False)
 
-    mock_sr2_instance.seed_session.assert_not_called()
+    mock_sr2_instance.seed_session.assert_called_once()
 
   @pytest.mark.asyncio
   async def test_turn_called_with_last_message_content(self):
